@@ -12,3 +12,4 @@ __pycache__/
 
 # Credentials/Keys
 *.json # Если service_account.json находится в корне, он будет проигнорирован.
+token.json
