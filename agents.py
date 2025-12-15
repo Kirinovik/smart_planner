@@ -1,29 +1,42 @@
-
 # agents.py
-
+import calendar_tools # <-- Корректный импорт модуля
 import autogen
 import os
 from dotenv import load_dotenv
-from google_calendar_tool import create_calendar_event
-#from calendar_tools import create_calendar_event
 
 load_dotenv()
 
+# Убедитесь, что GROQ_API_KEY существует
 api_key = os.getenv("GROQ_API_KEY")
 if not api_key:
-    raise ValueError("ОШИБКА: OPENAI_API_KEY не найден в файле .env или он пуст!")
-# 1. Конфигурация LLM (ChatGPT)
+    raise ValueError("ОШИБКА: GROQ_API_KEY не найден в файле .env или он пуст!")
+
+# 1. Конфигурация LLM
 config_list = [{
-    "model": "llama-3.1-8b-instant",  # Рекомендуется для лучшего извлечения данных
+    "model": "llama-3.1-8b-instant",
     "api_key": os.getenv("GROQ_API_KEY"),
-    "base_url": "https://api.groq.com/openai/v1"
+    "base_url": "https://api.groq.com/openai/v1",
+    "timeout": 120,      # Увеличиваем ожидание до 120 секунд
+    "max_retries": 5
 }]
 
 # 2. Агент Планировщик (Planner Agent)
-# Аналог вашего AI Agent: принимает решение, когда вызывать функцию.
 planner_agent = autogen.AssistantAgent(
     name="Planner",
-    llm_config={"config_list": config_list},
+    llm_config={
+        "config_list": config_list,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "create_calendar_event",
+                    "description": "Создает событие в Google Календаре. Принимает summary и start_datetime в ISO 8601.",
+                    # ИСПРАВЛЕНО: Используем schema из импортированного модуля calendar_tools
+                    "parameters": calendar_tools.create_calendar_event.schema 
+                }
+            }
+        ]
+    },
     system_message=(
         "Ты - Умный Планировщик. Твоя задача — анализировать запросы пользователя. "
         "Если запрос касается планирования (создания) события, ты должен вызвать функцию "
@@ -31,27 +44,28 @@ planner_agent = autogen.AssistantAgent(
         "ISO 8601 формате, включая смещение часового пояса (например, 2025-12-15T10:00:00+03:00)."
         "КЛЮЧЕВОЕ ПРАВИЛО: Вызов должен быть в формате Python: "
         "create_calendar_event(summary='Название', start_datetime='ГГГГ-ММ-ДДTЧЧ:ММ:СС+03:00'). "
-        "summary и start_datetime должны быть строками в кавычках."
+        "summary и start_datetime должны быть строками в кавычках. "
         "Не отвечай текстом до тех пор, пока не получишь результат от инструмента."
-        "Не отвечай текстом до тех пор, пока не получишь результат от инструмента."
-    ),
+        
+   )
 )
 
 # 3. Прокси-Агент Пользователя (User Proxy Agent)
-# Аналог триггера Telegram и узла Set/Expression: получает сообщение,
-# управляет вызовом функции и отправляет ответ пользователю.
 user_proxy = autogen.UserProxyAgent(
     name="User_Proxy",
-    human_input_mode="NEVER",  # Отключаем интерактивное взаимодействие в консоли
-    is_termination_msg=lambda x: ( "успешно добавлено" in x.get("content", "").lower()
-                             or x.get("content", "").rstrip().endswith("TERMINATE")
-			     or ("?" not in x.get("content", "") and not x.get("function_call"))
-),
-    code_execution_config={
-	"use_docker": False,
-    },
-    # Подключение функции
-    function_map={"create_calendar_event": create_calendar_event},
+    human_input_mode="NEVER",
+    is_termination_msg=lambda x: (
+        "успешно добавлено" in (x.get("content") or "").lower()
+        or (x.get("content") or "").rstrip().endswith("TERMINATE")
+    ),
+    code_execution_config={"use_docker": False},
+    
+    # ИСПРАВЛЕНО: Ссылка на функцию через модуль calendar_tools
+    function_map={"create_calendar_event": calendar_tools.create_calendar_event},
+    
     llm_config={"config_list": config_list},
-    max_consecutive_auto_reply=0,
+    # Максимальное количество автоответов должно быть больше 0, 
+    # чтобы дать агентам шанс завершить задачу после вызова функции.
+    # Установите 3 или 5. Если 0, диалог завершится слишком быстро.
+    max_consecutive_auto_reply=1, 
 )

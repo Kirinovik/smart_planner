@@ -1,54 +1,134 @@
-# /home/kirill/smart_planner_autogen/calendar_tools.py
-
 import os
-import requests
-import logging
+import datetime
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from typing import Optional
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+# --- КОНСТАНТЫ НАСТРОЙКИ ---
+SCOPES = ['https://www.googleapis.com/auth/calendar.events']
+TOKEN_FILE = 'token.json'
+CREDENTIALS_FILE = 'credentials.json'
+CALENDAR_ID = 'kirillnovikov1501@gmail.com'
+TIME_ZONE = 'Europe/Moscow'
+# ------------------------------
 
-# КРИТИЧЕСКИ ВАЖНО: Замените на URL вашего вебхука (n8n, Zapier и т.д.)
-# Убедитесь, что эта переменная есть в вашем файле .env
-CALENDAR_WEBHOOK_URL = os.getenv("CALENDAR_WEBHOOK_URL")
-
-def create_calendar_event(summary: str, start_datetime: str, end_datetime: str = None) -> str:
+def get_calendar_service():
     """
-    Создает событие в календаре, отправляя данные на внешний вебхук.
+    Авторизует пользователя через OAuth 2.0 и возвращает объект службы Google Calendar.
     """
-    logger.info("--- ФУНКЦИЯ CREATE_CALENDAR_EVENT ВЫЗВАНА ---")
-    logger.info(f"Параметры: Summary={summary}, Start={start_datetime}")
+    creds = None
+    print("DEBUG: Функция get_calendar_service() запущена.")
 
-    if not CALENDAR_WEBHOOK_URL:
-        logger.error("CALENDAR_WEBHOOK_URL не настроен в .env!")
-        return "Ошибка: Не настроен URL для внешнего API календаря."
+    if os.path.exists(TOKEN_FILE):
+        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
 
-    payload = {
-        "summary": summary,
-        "start": start_datetime,
-        "end": end_datetime if end_datetime else start_datetime, # Простая логика: если нет конца, конец = начало
-        "timezone": "Europe/Moscow" # или другой часовой пояс по умолчанию
-    }
-
-    logger.info(f"Отправка запроса на создание события: {summary}...")
-
-    try:
-        logger.info(f"Отправка POST-запроса на URL: {CALENDAR_WEBHOOK_URL}")
-        response = requests.post(CALENDAR_WEBHOOK_URL, json=payload, timeout=10)
-        logger.info(f"Ответ от API: Status={response.status_code}, Text={response.text}")
-        response.raise_for_status() # Вызывает исключение для 4xx/5xx ошибок
-
-        # Если API календаря возвращает успешный JSON ответ
-        if response.status_code in [200, 201]:
-            # Важно: В ответе должно быть ключевое слово "успешно добавлено"
-            return f"Событие '{summary}' успешно добавлено в календарь через Webhook."
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            print("Обновление токена доступа...")
+            creds.refresh(Request())
         else:
-            return f"Ошибка API календаря: Статус {response.status_code}. Ответ: {response.text}"
+            print("Запуск первой авторизации...")
+            try:
+                flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
+                creds = flow.run_local_server(port=0)
+            except FileNotFoundError:
+                raise FileNotFoundError(f"Файл {CREDENTIALS_FILE} не найден.")
 
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Ошибка HTTP-запроса к Webhook: {e}")
-        return f"Критическая ошибка подключения: Не удалось отправить данные на Webhook. {e}"
+        with open(TOKEN_FILE, 'w') as token:
+            token.write(creds.to_json())
+            print(f"Токен успешно сохранен в {TOKEN_FILE}.")
+
+    return build('calendar', 'v3', credentials=creds)
+
+
+def create_calendar_event(summary: str, start_datetime: str, end_datetime: Optional[str] = None) -> str:
+    """
+    Создает событие в Google Календаре.
+    """
+    try:
+        service = get_calendar_service()
+
+        if not end_datetime:
+            try:
+                start_dt_obj = datetime.datetime.fromisoformat(start_datetime)
+                end_dt_obj = start_dt_obj + datetime.timedelta(hours=1)
+                end_datetime = end_dt_obj.isoformat()
+            except ValueError:
+                end_datetime = start_datetime
+
+        print(f"DEBUG [1]: Начинаем запрос к API. Summary: {summary}")
+
+        event = {
+            'summary': summary,
+            'start': {
+                'dateTime': start_datetime,
+                'timeZone': TIME_ZONE,
+            },
+            'end': {
+                'dateTime': end_datetime,
+                'timeZone': TIME_ZONE,
+            },
+        }
+
+        # Выполняем запрос к API
+        event = service.events().insert(
+            calendarId=CALENDAR_ID,
+            body=event
+        ).execute()
+
+        print(f"DEBUG [2]: Google вернул ответ. ID события: {event.get('id')}")
+        print(f"DEBUG [3]: Полный URL события: {event.get('htmlLink')}")
+
+        return f"Событие '{summary}' успешно добавлено в Google Календарь. URL: {event.get('htmlLink')}"
+
+    except HttpError as e:
+        error_msg = f"Ошибка API Google Calendar (HTTP {e.resp.status}): {e.content.decode()}"
+        print(f"КРИТИЧЕСКАЯ ОШИБКА: {error_msg}")
+        return f"Критическая ошибка Google Calendar: {e.resp.status}. Проверьте токен."
+
     except Exception as e:
-        logger.error(f"Неизвестная ошибка в функции: {e}")
-        return f"Неизвестная ошибка: {e}"
+        print(f"НЕИЗВЕСТНАЯ ОШИБКА: {e}")
+        return f"Критическая ошибка Google Calendar: Проверьте консоль."
 
+# --- ОПРЕДЕЛЕНИЕ СХЕМЫ (ВАЖНО: ВНЕ ФУНКЦИИ, ВНЕ IF MAIN) ---
+create_calendar_event.schema = {
+    "name": "create_calendar_event",
+    "description": "Создает событие в Google Календаре. Принимает название и время начала.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "summary": {
+                "type": "string",
+                "description": "Название события."
+            },
+            "start_datetime": {
+                "type": "string",
+                "description": "Время начала в ISO 8601 формате, включая часовой пояс (например, 2025-12-16T18:00:00+03:00)."
+            },
+            "end_datetime": {
+                "type": "string",
+                "description": "Время окончания в ISO 8601 формате (опционально)."
+            }
+        },
+        "required": ["summary", "start_datetime"]
+    }
+}
 
+# --- ПРИМЕР РУЧНОГО ТЕСТИРОВАНИЯ ---
+if __name__ == '__main__':
+    test_start = (datetime.datetime.now() + datetime.timedelta(days=1)).replace(microsecond=0).isoformat() + "+03:00"
+
+    print("--- Запуск теста авторизации и создания события ---")
+    
+    # ВАЖНО: Просто вызываем функцию, закрываем скобку
+    result = create_calendar_event(
+        summary="Тест прямого подключения Python",
+        start_datetime=test_start,
+        end_datetime=None
+    ) 
+
+    print("Результат вызова функции:")
+    print(result)
