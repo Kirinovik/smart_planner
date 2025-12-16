@@ -3,7 +3,7 @@ import calendar_tools # <-- Корректный импорт модуля
 import autogen
 import os
 from dotenv import load_dotenv
-
+##
 load_dotenv()
 
 # Убедитесь, что GROQ_API_KEY существует
