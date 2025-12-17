@@ -1,22 +1,22 @@
 # agents.py
-import calendar_tools # <-- Корректный импорт модуля
+import calendar_tools
 import autogen
 import os
 from dotenv import load_dotenv
-##
+
 load_dotenv()
 
-# Убедитесь, что GROQ_API_KEY существует
-api_key = os.getenv("GROQ_API_KEY")
+
+api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
-    raise ValueError("ОШИБКА: GROQ_API_KEY не найден в файле .env или он пуст!")
+    raise ValueError("ОШИБКА:API_KEY не найден в файле .env или он пуст!")
 
 # 1. Конфигурация LLM
 config_list = [{
-    "model": "llama-3.1-8b-instant",
-    "api_key": os.getenv("GROQ_API_KEY"),
-    "base_url": "https://api.groq.com/openai/v1",
-    "timeout": 120,      # Увеличиваем ожидание до 120 секунд
+    "model": "gpt-5-mini",
+    "api_key": os.getenv("OPENAI_API_KEY"),
+#    "base_url": "https://api.groq.com/openai/v1",
+    "timeout": 120,
     "max_retries": 5
 }]
 
@@ -27,15 +27,24 @@ planner_agent = autogen.AssistantAgent(
         "config_list": config_list,
         "tools": [
             {
-                "type": "function",
+                "type": "function", # функция  добавления события
                 "function": {
                     "name": "create_calendar_event",
                     "description": "Создает событие в Google Календаре. Принимает summary и start_datetime в ISO 8601.",
                     # ИСПРАВЛЕНО: Используем schema из импортированного модуля calendar_tools
-                    "parameters": calendar_tools.create_calendar_event.schema 
+                    "parameters": calendar_tools.create_calendar_event.schema["parameters"]
                 }
-            }
-        ]
+            },
+            {
+                "type": "function", # функция вывода событий
+                "function": {
+                    "name": "list_calendar_events",
+                    "description": "Получает список ближайших событий из календаря.",
+                    "parameters": calendar_tools.list_calendar_events.schema["parameters"]
+                }
+             }
+
+       ]
     },
     system_message=(
         "Ты - Умный Планировщик. Твоя задача — анализировать запросы пользователя. "
@@ -46,7 +55,12 @@ planner_agent = autogen.AssistantAgent(
         "create_calendar_event(summary='Название', start_datetime='ГГГГ-ММ-ДДTЧЧ:ММ:СС+03:00'). "
         "summary и start_datetime должны быть строками в кавычках. "
         "Не отвечай текстом до тех пор, пока не получишь результат от инструмента."
-        
+        "ТВОИ ВОЗМОЖНОСТИ:\n"
+        "1. Создавать события: используй 'create_calendar_event'.\n"
+        "2. Показывать список дел: если пользователь спрашивает 'что у меня запланировано', 'какие планы' или 'покажи календарь', "
+        "используй функцию 'list_calendar_events'.\n\n"
+
+        "После вывода списка событий или создания нового, всегда добавляй TERMINATE в конце."
    )
 )
 
@@ -59,13 +73,11 @@ user_proxy = autogen.UserProxyAgent(
         or (x.get("content") or "").rstrip().endswith("TERMINATE")
     ),
     code_execution_config={"use_docker": False},
-    
-    # ИСПРАВЛЕНО: Ссылка на функцию через модуль calendar_tools
-    function_map={"create_calendar_event": calendar_tools.create_calendar_event},
-    
+
+
+    function_map={"create_calendar_event": calendar_tools.create_calendar_event,
+                 "list_calendar_events": calendar_tools.list_calendar_events},
+
     llm_config={"config_list": config_list},
-    # Максимальное количество автоответов должно быть больше 0, 
-    # чтобы дать агентам шанс завершить задачу после вызова функции.
-    # Установите 3 или 5. Если 0, диалог завершится слишком быстро.
-    max_consecutive_auto_reply=1, 
+    max_consecutive_auto_reply=1,
 )

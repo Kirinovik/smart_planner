@@ -7,13 +7,12 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from typing import Optional
 
-# --- КОНСТАНТЫ НАСТРОЙКИ ---
+# Настройки
 SCOPES = ['https://www.googleapis.com/auth/calendar.events']
 TOKEN_FILE = 'token.json'
 CREDENTIALS_FILE = 'credentials.json'
 CALENDAR_ID = 'kirillnovikov1501@gmail.com'
 TIME_ZONE = 'Europe/Moscow'
-# ------------------------------
 
 def get_calendar_service():
     """
@@ -73,7 +72,7 @@ def create_calendar_event(summary: str, start_datetime: str, end_datetime: Optio
             },
         }
 
-        # Выполняем запрос к API
+        # Запрос к API
         event = service.events().insert(
             calendarId=CALENDAR_ID,
             body=event
@@ -93,7 +92,7 @@ def create_calendar_event(summary: str, start_datetime: str, end_datetime: Optio
         print(f"НЕИЗВЕСТНАЯ ОШИБКА: {e}")
         return f"Критическая ошибка Google Calendar: Проверьте консоль."
 
-# --- ОПРЕДЕЛЕНИЕ СХЕМЫ (ВАЖНО: ВНЕ ФУНКЦИИ, ВНЕ IF MAIN) ---
+
 create_calendar_event.schema = {
     "name": "create_calendar_event",
     "description": "Создает событие в Google Календаре. Принимает название и время начала.",
@@ -117,18 +116,58 @@ create_calendar_event.schema = {
     }
 }
 
-# --- ПРИМЕР РУЧНОГО ТЕСТИРОВАНИЯ ---
+def list_calendar_events(max_results=10):
+    """Возвращает список ближайших событий из календаря."""
+    service = get_calendar_service()
+    # Получаем текущее время в формате ISO
+    now = datetime.datetime.utcnow().isoformat() + 'Z'
+
+    events_result = service.events().list(
+        calendarId='primary',
+        timeMin=now,
+        maxResults=max_results,
+        singleEvents=True,
+        orderBy='startTime'
+    ).execute()
+
+    events = events_result.get('items', [])
+
+    if not events:
+        return "На ближайшее время событий не найдено."
+
+    result = "Ваши ближайшие события:\n"
+    for event in events:
+        start = event['start'].get('dateTime', event['start'].get('date'))
+
+        display_time = start.replace('T', ' ')[:16]
+        result += f"- {display_time}: {event.get('summary', 'Без названия')}\n"
+
+    return result
+
+# Описание для Autogen
+list_calendar_events.schema = {
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "max_results": {
+                "type": "integer",
+                "description": "Количество событий для вывода (по умолчанию 10)."
+            }
+        }
+    }
+}
+
+
 if __name__ == '__main__':
     test_start = (datetime.datetime.now() + datetime.timedelta(days=1)).replace(microsecond=0).isoformat() + "+03:00"
 
     print("--- Запуск теста авторизации и создания события ---")
-    
-    # ВАЖНО: Просто вызываем функцию, закрываем скобку
+
     result = create_calendar_event(
         summary="Тест прямого подключения Python",
         start_datetime=test_start,
         end_datetime=None
-    ) 
+    )
 
     print("Результат вызова функции:")
     print(result)
